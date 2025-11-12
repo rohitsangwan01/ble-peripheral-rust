@@ -22,7 +22,7 @@ use characteristic_utils::parse_services;
 use futures::{channel::oneshot, StreamExt};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{Arc, Mutex},
 };
 use tokio::sync::mpsc::Sender;
 use uuid::Uuid;
@@ -37,7 +37,7 @@ pub struct Peripheral {
     app_handle: Option<ApplicationHandle>,
     sender_tx: Sender<PeripheralEvent>,
     writers: Arc<Mutex<HashMap<Uuid, Arc<CharacteristicWriter>>>>,
-    notifiers: Arc<Mutex<HashMap<Uuid, (AtomicBool, Vec<u8>)>>>,
+    notifiers: Arc<Mutex<HashMap<Uuid, Sender<Vec<u8>>>>>,
     _drop_tx: oneshot::Sender<()>,
 }
 
@@ -168,14 +168,20 @@ impl PeripheralImpl for Peripheral {
         
         let mut notifier_mutex = self.notifiers.lock().unwrap();
 
+        let mut notifier_tx: Option<Sender<Vec<u8>>> = None;
         if let Some(char_notifier_values) = notifier_mutex.get_mut(&characteristic) {
-            char_notifier_values.0.store(true, std::sync::atomic::Ordering::Relaxed);
-            char_notifier_values.1 = value.clone();
+            notifier_tx = Some(char_notifier_values.clone());
         }
         
         drop(notifier_mutex);
         drop(writers);
         tokio::spawn(async move {
+            if let Some(notifier_tx) = notifier_tx {
+                if let Err(err) = notifier_tx.send(value.clone()).await {
+                    log::error!("Error notifying value {err:?}")
+                }
+            }
+            
             if let Some(writer) = writer {
                 if let Err(err) = writer.send(&value).await {
                     log::error!("Error sending value {err:?}")
