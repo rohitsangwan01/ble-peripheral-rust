@@ -22,7 +22,7 @@ use characteristic_utils::parse_services;
 use futures::{channel::oneshot, StreamExt};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::AtomicBool},
 };
 use tokio::sync::mpsc::Sender;
 use uuid::Uuid;
@@ -37,6 +37,7 @@ pub struct Peripheral {
     app_handle: Option<ApplicationHandle>,
     sender_tx: Sender<PeripheralEvent>,
     writers: Arc<Mutex<HashMap<Uuid, Arc<CharacteristicWriter>>>>,
+    notifiers: Arc<Mutex<HashMap<Uuid, (AtomicBool, Vec<u8>)>>>,
     _drop_tx: oneshot::Sender<()>,
 }
 
@@ -94,6 +95,7 @@ impl PeripheralImpl for Peripheral {
             app_handle: None,
             sender_tx,
             writers: Arc::new(Mutex::new(HashMap::new())),
+            notifiers: Arc::new(Mutex::new(HashMap::new())),
             _drop_tx: drop_tx,
         })
     }
@@ -125,7 +127,7 @@ impl PeripheralImpl for Peripheral {
         };
         let adv_handle: AdvertisementHandle = self.adapter.advertise(le_advertisement).await?;
 
-        let (handlers, services) = parse_services(self.services.clone(), self.sender_tx.clone());
+        let (handlers, services) = parse_services(self.services.clone(), self.sender_tx.clone(), self.notifiers.clone());
 
         let app_handle = self
             .adapter
@@ -163,6 +165,15 @@ impl PeripheralImpl for Peripheral {
             Err(err) => return Err(Error::from_string(err.to_string(), ErrorType::Bluez)),
         };
         let writer = writers.get(&characteristic).cloned();
+        
+        let mut notifier_mutex = self.notifiers.lock().unwrap();
+
+        if let Some(char_notifier_values) = notifier_mutex.get_mut(&characteristic) {
+            char_notifier_values.0.store(true, std::sync::atomic::Ordering::Relaxed);
+            char_notifier_values.1 = value.clone();
+        }
+        
+        drop(notifier_mutex);
         drop(writers);
         tokio::spawn(async move {
             if let Some(writer) = writer {

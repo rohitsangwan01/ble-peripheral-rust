@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
+
 use super::bluez_utils::CharNotifyHandler;
 use crate::gatt::peripheral_event::{
     PeripheralEvent, PeripheralRequest, ReadRequestResponse, RequestResponse, WriteRequestResponse,
@@ -20,6 +24,7 @@ use uuid::Uuid;
 pub fn parse_services(
     gatt_services: Vec<service::Service>,
     sender_tx: Sender<PeripheralEvent>,
+    notifiers: Arc<Mutex<HashMap<Uuid, (AtomicBool, Vec<u8>)>>>,
 ) -> (Vec<CharNotifyHandler>, Vec<Service>) {
     let mut services: Vec<Service> = vec![];
     let mut char_notify_handlers: Vec<CharNotifyHandler> = vec![];
@@ -31,7 +36,7 @@ pub fn parse_services(
         let service_uuid = service.uuid.clone();
 
         for char in service.characteristics.clone() {
-            let result = parse_characteristic(char.clone(), service.uuid, sender_tx.clone());
+            let result = parse_characteristic(char.clone(), service.uuid, sender_tx.clone(), notifiers.clone());
 
             if let Some(char_control) = result.1 {
                 char_notify_handlers.push(CharNotifyHandler {
@@ -61,6 +66,7 @@ fn parse_characteristic(
     characteristic: characteristic::Characteristic,
     service_uuid: Uuid,
     sender_tx: Sender<PeripheralEvent>,
+    notifiers: Arc<Mutex<HashMap<Uuid, (AtomicBool, Vec<u8>)>>>,
 ) -> (Characteristic, Option<CharacteristicControl>) {
     let descriptors: Vec<Descriptor> = characteristic
         .descriptors
@@ -68,7 +74,7 @@ fn parse_characteristic(
         .map(|data| parse_descriptor(data.clone()))
         .collect();
 
-    let char_notify = get_characteristic_notify(characteristic.clone());
+    let char_notify = get_characteristic_notify(characteristic.clone(), notifiers);
 
     let mut control: Option<CharacteristicControl> = None;
 
@@ -182,6 +188,7 @@ fn get_characteristic_write(
 
 fn get_characteristic_notify(
     characteristic: characteristic::Characteristic,
+    notifiers: Arc<Mutex<HashMap<Uuid, (AtomicBool, Vec<u8>)>>>,
 ) -> Option<CharacteristicNotify> {
     let notify = characteristic
         .properties
@@ -200,10 +207,45 @@ fn get_characteristic_notify(
         return None;
     }
 
+    let characteristic_uuid = characteristic.uuid.clone();
+
+    let mut notifiers_mutex = notifiers.lock().unwrap();
+    notifiers_mutex.insert(characteristic_uuid.to_owned(), (AtomicBool::new(false), vec![]));
+    drop(notifiers_mutex);
+
     return Some(CharacteristicNotify {
         notify: notify || notify_encryption_required,
         indicate: indicate || indicate_encryption_required,
-        method: CharacteristicNotifyMethod::Io,
+        method: CharacteristicNotifyMethod::Fun(Box::new(move |mut notifier| {
+            let notifiers = notifiers.clone();
+            async move {
+                loop {
+                    let maybe_value = {
+                        let mut notifiers_mutex = notifiers.lock().unwrap();
+
+                        if let Some(notifier_values) = notifiers_mutex.get_mut(&characteristic_uuid) {
+                            if notifier_values.0.load(std::sync::atomic::Ordering::Relaxed) {
+                                notifier_values.0.store(false, std::sync::atomic::Ordering::Relaxed);
+
+                                let value = notifier_values.1.clone();
+                                Some(value)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+                    
+                    if let Some(value) = maybe_value {
+                        let _ = notifier.notify(value).await;
+                    }
+
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                }
+            }
+            .boxed()
+        })),
         ..Default::default()
     });
 }
