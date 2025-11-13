@@ -165,19 +165,18 @@ impl PeripheralImpl for Peripheral {
             Err(err) => return Err(Error::from_string(err.to_string(), ErrorType::Bluez)),
         };
         let writer = writers.get(&characteristic).cloned();
-        
-        let mut notifier_mutex = self.notifiers.lock().unwrap();
 
-        let mut notifier_tx: Option<Sender<Vec<u8>>> = None;
-        if let Some(char_notifier_values) = notifier_mutex.get_mut(&characteristic) {
-            notifier_tx = Some(char_notifier_values.clone());
-        }
+        let notifiers = match self.notifiers.lock() {
+            Ok(w) => w,
+            Err(err) => return Err(Error::from_string(err.to_string(), ErrorType::Bluez)),
+        };
+        let notifier = notifiers.get(&characteristic).cloned();
         
-        drop(notifier_mutex);
+        drop(notifiers);
         drop(writers);
         tokio::spawn(async move {
-            if let Some(notifier_tx) = notifier_tx {
-                if let Err(err) = notifier_tx.send(value.clone()).await {
+            if let Some(notifier) = notifier {
+                if let Err(err) = notifier.send(value.clone()).await {
                     log::error!("Error notifying value {err:?}")
                 }
             }
@@ -198,6 +197,7 @@ impl Peripheral {
         for mut handler in handlers {
             let sender_tx = self.sender_tx.clone();
             let writers = self.writers.clone();
+            let notifiers = self.notifiers.clone();
 
             tokio::spawn(async move {
                 while let Some(CharacteristicControlEvent::Notify(writer)) =
@@ -210,7 +210,7 @@ impl Peripheral {
                         service: handler.service_uuid,
                         characteristic: handler.characteristic_uuid,
                     };
-
+                    
                     if let Err(err) = sender_tx
                         .send(PeripheralEvent::CharacteristicSubscriptionUpdate {
                             request: peripheral_request.clone(),
@@ -235,6 +235,12 @@ impl Peripheral {
                         writers_lock.remove(&handler.characteristic_uuid);
                     } else {
                         log::error!("Failed to lock writers for removing a writer");
+                    }
+
+                    if let Ok(mut notifier_lock) = notifiers.lock() {
+                        notifier_lock.remove(&handler.characteristic_uuid);
+                    } else {
+                        log::error!("Failed to lock writers for removing a notifier");
                     }
 
                     if let Err(err) = sender_tx

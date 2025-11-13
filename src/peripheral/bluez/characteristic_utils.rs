@@ -212,12 +212,15 @@ fn get_characteristic_notify(
         notify: notify || notify_encryption_required,
         indicate: indicate || indicate_encryption_required,
         method: CharacteristicNotifyMethod::Fun(Box::new(move |mut notifier| {
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(32);
+            // setting to 1 since we only need the latest according to my understanding
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
             let notifiers = notifiers.clone();
 
-            let mut notifiers_mutex = notifiers.lock().unwrap();
-            notifiers_mutex.insert(characteristic_uuid.to_owned(), tx);
-            drop(notifiers_mutex);
+            if let Ok(mut notifier_lock) = notifiers.lock() {
+                notifier_lock.insert(characteristic_uuid.to_owned(), tx);
+            } else {
+                log::error!("Failed to lock notifiers for cleanup");
+            }
 
             async move {
                 while let Some(bytes) = rx.recv().await {
@@ -226,6 +229,11 @@ fn get_characteristic_notify(
                     }
                 }
 
+                if let Ok(mut notifier_lock) = notifiers.lock() {
+                    notifier_lock.remove(&characteristic_uuid);
+                } else {
+                    log::error!("Failed to lock notifiers for cleanup");
+                }
             }
             .boxed()
         })),
