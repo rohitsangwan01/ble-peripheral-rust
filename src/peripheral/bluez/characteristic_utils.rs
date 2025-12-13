@@ -23,7 +23,7 @@ use uuid::Uuid;
 pub fn parse_services(
     gatt_services: Vec<service::Service>,
     sender_tx: Sender<PeripheralEvent>,
-    notifiers: Arc<Mutex<HashMap<Uuid, Sender<Vec<u8>>>>>,
+    notifiers: Arc<Mutex<HashMap<Uuid, (Uuid, Sender<Vec<u8>>)>>>,
 ) -> (Vec<CharNotifyHandler>, Vec<Service>) {
     let mut services: Vec<Service> = vec![];
     let mut char_notify_handlers: Vec<CharNotifyHandler> = vec![];
@@ -65,7 +65,7 @@ fn parse_characteristic(
     characteristic: characteristic::Characteristic,
     service_uuid: Uuid,
     sender_tx: Sender<PeripheralEvent>,
-    notifiers: Arc<Mutex<HashMap<Uuid, Sender<Vec<u8>>>>>,
+    notifiers: Arc<Mutex<HashMap<Uuid, (Uuid, Sender<Vec<u8>>)>>>,
 ) -> (Characteristic, Option<CharacteristicControl>) {
     let descriptors: Vec<Descriptor> = characteristic
         .descriptors
@@ -187,7 +187,7 @@ fn get_characteristic_write(
 
 fn get_characteristic_notify(
     characteristic: characteristic::Characteristic,
-    notifiers: Arc<Mutex<HashMap<Uuid, Sender<Vec<u8>>>>>,
+    notifiers: Arc<Mutex<HashMap<Uuid, (Uuid, Sender<Vec<u8>>)>>>,
 ) -> Option<CharacteristicNotify> {
     let notify = characteristic
         .properties
@@ -212,30 +212,39 @@ fn get_characteristic_notify(
         notify: notify || notify_encryption_required,
         indicate: indicate || indicate_encryption_required,
         method: CharacteristicNotifyMethod::Fun(Box::new(move |mut notifier| {
-            // setting to 1 since we only need the latest according to my understanding
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
+            
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(24);
             let notifiers = notifiers.clone();
 
-            if let Ok(mut notifier_lock) = notifiers.lock() {
-                notifier_lock.insert(characteristic_uuid.to_owned(), tx);
-            } else {
-                log::error!("Failed to lock notifiers for cleanup");
+            let session_id = uuid::Uuid::new_v4();
+            if let Ok(mut lock) = notifiers.lock() {
+                lock.insert(characteristic_uuid, (session_id, tx));
             }
 
             async move {
-                while let Some(bytes) = rx.recv().await {
+                while let Some(mut bytes) = rx.recv().await {
+
+                    // keep latest in case notifications arrive too quickly
+                     while let Ok(next) = rx.try_recv() {
+                        bytes = next;
+                    }
+
                     if let Err(err) = notifier.notify(bytes).await {
-                        log::error!("Error notifying value {err:?}")
+                        log::error!("Error notifying value {err:?}");
+                        break;
                     }
                 }
 
                 if let Ok(mut notifier_lock) = notifiers.lock() {
-                    notifier_lock.remove(&characteristic_uuid);
+                    if let Some((current_id, _)) = notifier_lock.get(&characteristic_uuid) {
+                        if *current_id == session_id {
+                            notifier_lock.remove(&characteristic_uuid);
+                        }
+                    }
                 } else {
                     log::error!("Failed to lock notifiers for cleanup");
                 }
-            }
-            .boxed()
+            }.boxed()
         })),
         ..Default::default()
     });

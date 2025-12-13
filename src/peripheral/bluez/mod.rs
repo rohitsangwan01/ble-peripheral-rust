@@ -37,7 +37,7 @@ pub struct Peripheral {
     app_handle: Option<ApplicationHandle>,
     sender_tx: Sender<PeripheralEvent>,
     writers: Arc<Mutex<HashMap<Uuid, Arc<CharacteristicWriter>>>>,
-    notifiers: Arc<Mutex<HashMap<Uuid, Sender<Vec<u8>>>>>,
+    notifiers: Arc<Mutex<HashMap<Uuid, (Uuid, Sender<Vec<u8>>)>>>,
     _drop_tx: oneshot::Sender<()>,
 }
 
@@ -167,7 +167,7 @@ impl PeripheralImpl for Peripheral {
         let writer = writers.get(&characteristic).cloned();
 
         let notifiers = match self.notifiers.lock() {
-            Ok(w) => w,
+            Ok(n) => n,
             Err(err) => return Err(Error::from_string(err.to_string(), ErrorType::Bluez)),
         };
         let notifier = notifiers.get(&characteristic).cloned();
@@ -176,7 +176,7 @@ impl PeripheralImpl for Peripheral {
         drop(writers);
         tokio::spawn(async move {
             if let Some(notifier) = notifier {
-                if let Err(err) = notifier.send(value.clone()).await {
+                if let Err(err) = notifier.1.send(value.clone()).await {
                     log::error!("Error notifying value {err:?}")
                 }
             }
@@ -204,7 +204,7 @@ impl Peripheral {
                     handler.control.next().await
                 {
                     let writer = Arc::new(writer);
-
+                    
                     let peripheral_request = PeripheralRequest {
                         client: writer.device_address().to_string(),
                         service: handler.service_uuid,
