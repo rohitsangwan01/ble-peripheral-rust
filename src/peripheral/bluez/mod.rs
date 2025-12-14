@@ -37,6 +37,7 @@ pub struct Peripheral {
     app_handle: Option<ApplicationHandle>,
     sender_tx: Sender<PeripheralEvent>,
     writers: Arc<Mutex<HashMap<Uuid, Arc<CharacteristicWriter>>>>,
+    notifiers: Arc<Mutex<HashMap<Uuid, (Uuid, Sender<Vec<u8>>)>>>,
     _drop_tx: oneshot::Sender<()>,
 }
 
@@ -94,6 +95,7 @@ impl PeripheralImpl for Peripheral {
             app_handle: None,
             sender_tx,
             writers: Arc::new(Mutex::new(HashMap::new())),
+            notifiers: Arc::new(Mutex::new(HashMap::new())),
             _drop_tx: drop_tx,
         })
     }
@@ -125,7 +127,7 @@ impl PeripheralImpl for Peripheral {
         };
         let adv_handle: AdvertisementHandle = self.adapter.advertise(le_advertisement).await?;
 
-        let (handlers, services) = parse_services(self.services.clone(), self.sender_tx.clone());
+        let (handlers, services) = parse_services(self.services.clone(), self.sender_tx.clone(), self.notifiers.clone());
 
         let app_handle = self
             .adapter
@@ -163,8 +165,22 @@ impl PeripheralImpl for Peripheral {
             Err(err) => return Err(Error::from_string(err.to_string(), ErrorType::Bluez)),
         };
         let writer = writers.get(&characteristic).cloned();
+
+        let notifiers = match self.notifiers.lock() {
+            Ok(n) => n,
+            Err(err) => return Err(Error::from_string(err.to_string(), ErrorType::Bluez)),
+        };
+        let notifier = notifiers.get(&characteristic).cloned();
+        
+        drop(notifiers);
         drop(writers);
         tokio::spawn(async move {
+            if let Some(notifier) = notifier {
+                if let Err(err) = notifier.1.send(value.clone()).await {
+                    log::error!("Error notifying value {err:?}")
+                }
+            }
+            
             if let Some(writer) = writer {
                 if let Err(err) = writer.send(&value).await {
                     log::error!("Error sending value {err:?}")
@@ -181,19 +197,20 @@ impl Peripheral {
         for mut handler in handlers {
             let sender_tx = self.sender_tx.clone();
             let writers = self.writers.clone();
+            let notifiers = self.notifiers.clone();
 
             tokio::spawn(async move {
                 while let Some(CharacteristicControlEvent::Notify(writer)) =
                     handler.control.next().await
                 {
                     let writer = Arc::new(writer);
-
+                    
                     let peripheral_request = PeripheralRequest {
                         client: writer.device_address().to_string(),
                         service: handler.service_uuid,
                         characteristic: handler.characteristic_uuid,
                     };
-
+                    
                     if let Err(err) = sender_tx
                         .send(PeripheralEvent::CharacteristicSubscriptionUpdate {
                             request: peripheral_request.clone(),
@@ -218,6 +235,12 @@ impl Peripheral {
                         writers_lock.remove(&handler.characteristic_uuid);
                     } else {
                         log::error!("Failed to lock writers for removing a writer");
+                    }
+
+                    if let Ok(mut notifier_lock) = notifiers.lock() {
+                        notifier_lock.remove(&handler.characteristic_uuid);
+                    } else {
+                        log::error!("Failed to lock writers for removing a notifier");
                     }
 
                     if let Err(err) = sender_tx
