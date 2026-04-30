@@ -128,6 +128,7 @@ impl WinEventHandler {
                                     client,
                                     service: service_uuid,
                                     characteristic: characteristic_uuid,
+                                    mtu: None,
                                 },
                                 subscribed: true,
                             })
@@ -144,6 +145,7 @@ impl WinEventHandler {
                                     client,
                                     service: service_uuid,
                                     characteristic: characteristic_uuid,
+                                    mtu: None,
                                 },
                                 subscribed: false,
                             })
@@ -181,6 +183,7 @@ impl WinEventHandler {
                                     client: device_id_from_session(event_args.Session().unwrap()),
                                     service: service_uuid,
                                     characteristic: to_uuid(&characteristic.Uuid().unwrap()),
+                                    mtu: None,
                                 },
                                 offset: request.Offset().unwrap() as u64,
                                 responder: resp_tx,
@@ -238,6 +241,7 @@ impl WinEventHandler {
                                     client: device_id_from_session(event_args.Session().unwrap()),
                                     service: service_uuid,
                                     characteristic: char_uuid,
+                                    mtu: None,
                                 },
                                 value: buffer_to_vec(&request.Value().unwrap()),
                                 offset: request.Offset().unwrap() as u64,

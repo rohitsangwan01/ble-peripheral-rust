@@ -28,6 +28,7 @@ pub struct PeripheralRequest {
     pub client: String,
     pub service: Uuid,
     pub characteristic: Uuid,
+    pub mtu: Option<usize>,
 }
 
 #[derive(Debug)]

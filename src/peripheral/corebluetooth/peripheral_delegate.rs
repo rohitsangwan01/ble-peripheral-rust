@@ -99,6 +99,7 @@ declare_class!(
                         client: central.identifier().to_string(),
                         service: characteristic.service().unwrap().get_uuid(),
                         characteristic: characteristic.get_uuid(),
+                        mtu: Some(central.maximumUpdateValueLength() as usize),
                     },
                     subscribed: true,
                 });
@@ -122,6 +123,7 @@ declare_class!(
                     client: central.identifier().to_string(),
                     service: characteristic.service().unwrap().get_uuid(),
                     characteristic: characteristic.get_uuid(),
+                    mtu: Some(central.maximumUpdateValueLength() as usize),
                 },
                 subscribed: false,
             });
@@ -146,6 +148,7 @@ declare_class!(
                         client: central.identifier().to_string(),
                         service: characteristic.service().unwrap().get_uuid(),
                         characteristic: characteristic.get_uuid(),
+                        mtu: Some(central.maximumUpdateValueLength() as usize),
                     },
                     manager,
                     request,
@@ -177,6 +180,7 @@ declare_class!(
                              client: central.identifier().to_string(),
                             service: characteristic.service().unwrap().get_uuid(),
                             characteristic: characteristic.get_uuid(),
+                            mtu: Some(central.maximumUpdateValueLength() as usize),
                         },
                         manager,
                         request,

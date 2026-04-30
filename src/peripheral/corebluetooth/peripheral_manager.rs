@@ -190,13 +190,19 @@ impl PeripheralManager {
         value: Vec<u8>,
     ) -> Result<(), Error> {
         if let Some(char) = self.cached_characteristics.get(&characteristic) {
-            unsafe {
+            let success = unsafe {
                 self.cb_peripheral_manager
                     .updateValue_forCharacteristic_onSubscribedCentrals(
                         &NSData::from_vec(value.clone()),
                         char,
                         None,
-                    );
+                    )
+            };
+            if !success {
+                return Err(Error::from_string(
+                    "Transmit queue is full".to_string(),
+                    ErrorType::CoreBluetooth,
+                ));
             }
         }
         return Ok(());
