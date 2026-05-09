@@ -49,12 +49,13 @@ impl PeripheralImpl for Peripheral {
         return responder_rx.await?;
     }
 
-    async fn start_advertising(&mut self, name: &str, uuids: &[Uuid]) -> Result<(), Error> {
+    async fn start_advertising(&mut self, name: &str, uuids: &[Uuid], manufacturer_data: Option<(u16, Vec<u8>)>) -> Result<(), Error> {
         let (responder, responder_rx) = oneshot::channel();
         self.manager_tx
             .send(ManagerEvent::StartAdvertising {
                 name: name.to_string(),
                 uuids: uuids.to_vec(),
+                manufacturer_data,
                 responder,
             })
             .await?;

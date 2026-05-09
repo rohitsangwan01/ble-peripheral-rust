@@ -108,8 +108,11 @@ impl PeripheralImpl for Peripheral {
         return Ok(result > 0 && self.adv_handle.is_some());
     }
 
-    async fn start_advertising(&mut self, name: &str, uuids: &[Uuid]) -> Result<(), Error> {
-        let manufacturer_data = BTreeMap::new();
+    async fn start_advertising(&mut self, name: &str, uuids: &[Uuid], manufacturer_data_arg: Option<(u16, Vec<u8>)>) -> Result<(), Error> {
+        let mut manufacturer_data = BTreeMap::new();
+        if let Some((company_id, data)) = manufacturer_data_arg {
+            manufacturer_data.insert(company_id, data);
+        }
 
         let mut services: BTreeSet<Uuid> = BTreeSet::new();
         for uuid in uuids {
