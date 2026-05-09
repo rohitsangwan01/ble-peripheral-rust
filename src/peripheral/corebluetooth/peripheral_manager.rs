@@ -7,7 +7,7 @@ use crate::gatt::service::Service;
 use objc2::msg_send_id;
 use objc2::{rc::Retained, runtime::AnyObject, ClassType};
 use objc2_core_bluetooth::{
-    CBAdvertisementDataLocalNameKey, CBAdvertisementDataServiceUUIDsKey, CBCharacteristic,
+    CBAdvertisementDataLocalNameKey, CBAdvertisementDataServiceUUIDsKey, CBAdvertisementDataManufacturerDataKey, CBCharacteristic,
     CBManager, CBManagerAuthorization, CBManagerState, CBMutableCharacteristic, CBMutableService,
     CBPeripheralManager,
 };
@@ -31,6 +31,7 @@ pub(crate) enum ManagerEvent {
     StartAdvertising {
         name: String,
         uuids: Vec<Uuid>,
+        manufacturer_data: Option<(u16, Vec<u8>)>,
         responder: oneshot::Sender<Result<(), Error>>,
     },
     StopAdvertising {
@@ -108,9 +109,10 @@ impl PeripheralManager {
                 ManagerEvent::StartAdvertising {
                     name,
                     uuids,
+                    manufacturer_data,
                     responder,
                 } => {
-                    let _ = responder.send(self.start_advertising(&name, &uuids).await);
+                    let _ = responder.send(self.start_advertising(&name, &uuids, manufacturer_data).await);
                 }
                 ManagerEvent::StopAdvertising { responder } => {
                     let _ = responder.send(Ok(self.stop_advertising()));
@@ -136,7 +138,7 @@ impl PeripheralManager {
         }
     }
 
-    async fn start_advertising(self: &Self, name: &str, uuids: &[Uuid]) -> Result<(), Error> {
+    async fn start_advertising(self: &Self, name: &str, uuids: &[Uuid], manufacturer_data: Option<(u16, Vec<u8>)>) -> Result<(), Error> {
         if self
             .peripheral_delegate
             .is_waiting_for_advertisement_result()
@@ -158,6 +160,14 @@ impl PeripheralManager {
             objects.push(Retained::cast(NSArray::from_vec(
                 uuids.iter().map(|u| uuid_to_cbuuid(u.clone())).collect(),
             )));
+
+            if let Some((company_id, data)) = manufacturer_data {
+                keys.push(CBAdvertisementDataManufacturerDataKey);
+                let mut combined_data = Vec::with_capacity(2 + data.len());
+                combined_data.extend_from_slice(&company_id.to_le_bytes());
+                combined_data.extend_from_slice(&data);
+                objects.push(Retained::cast(NSData::from_vec(combined_data)));
+            }
         }
 
         let advertising_data: Retained<NSDictionary<NSString, AnyObject>> =

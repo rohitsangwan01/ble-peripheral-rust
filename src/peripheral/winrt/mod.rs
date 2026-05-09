@@ -31,7 +31,7 @@ impl PeripheralImpl for Peripheral {
         Ok(self.peripheral_manager.is_powered().await?)
     }
 
-    async fn start_advertising(&mut self, name: &str, uuids: &[Uuid]) -> Result<(), Error> {
+    async fn start_advertising(&mut self, name: &str, uuids: &[Uuid], _manufacturer_data: Option<(u16, Vec<u8>)>) -> Result<(), Error> {
         if let Err(err) = self.peripheral_manager.start_advertising(name, uuids).await {
             return Err(Error::from(err));
         }
