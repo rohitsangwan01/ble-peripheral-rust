@@ -12,7 +12,6 @@ use objc2_core_bluetooth::{
     CBPeripheralManager,
 };
 use objc2_foundation::{NSArray, NSData, NSDictionary, NSString};
-use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::thread;
@@ -47,24 +46,17 @@ pub(crate) enum ManagerEvent {
     },
 }
 
-static PERIPHERAL_THREAD: OnceCell<()> = OnceCell::new();
-
-// Handle Peripheral Manager and all communication in a separate thread
 pub fn run_peripheral_thread(sender: Sender<PeripheralEvent>, listener: Receiver<ManagerEvent>) {
-    PERIPHERAL_THREAD.get_or_init(|| {
-        thread::spawn(move || {
-            let runtime = runtime::Builder::new_current_thread().enable_time().build();
-            if runtime.is_err() {
-                log::error!("Failed to create runtime");
-                return;
-            }
-            runtime.unwrap().block_on(async move {
-                let mut peripheral_manager = PeripheralManager::new(sender, listener);
-                loop {
-                    peripheral_manager.handle_event().await;
-                }
-            })
-        });
+    thread::spawn(move || {
+        let runtime = runtime::Builder::new_current_thread().enable_time().build();
+        if runtime.is_err() {
+            log::error!("Failed to create runtime");
+            return;
+        }
+        runtime.unwrap().block_on(async move {
+            let mut peripheral_manager = PeripheralManager::new(sender, listener);
+            while peripheral_manager.handle_event().await {}
+        })
     });
 }
 
@@ -96,7 +88,7 @@ impl PeripheralManager {
         }
     }
 
-    async fn handle_event(&mut self) {
+    async fn handle_event(&mut self) -> bool {
         if let Some(event) = self.manager_event.recv().await {
             let _ = match event {
                 ManagerEvent::IsPowered { responder } => {
@@ -126,6 +118,9 @@ impl PeripheralManager {
                     let _ = responder.send(self.update_characteristic(characteristic, value).await);
                 }
             };
+            true
+        } else {
+            false
         }
     }
 
