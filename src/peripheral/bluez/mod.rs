@@ -128,20 +128,29 @@ impl PeripheralImpl for Peripheral {
         };
         let adv_handle: AdvertisementHandle = self.adapter.advertise(le_advertisement).await?;
 
-        let (handlers, services) = parse_services(self.services.clone(), self.sender_tx.clone());
+        // Skip GATT application registration entirely when there are no
+        // services to serve. BlueZ's RegisterApplication rejects an empty
+        // ServiceInterfaces set ("No object received"), which broke pure
+        // advertising-only use (no GATT characteristics at all).
+        let app_handle = if self.services.is_empty() {
+            None
+        } else {
+            let (handlers, services) = parse_services(self.services.clone(), self.sender_tx.clone());
 
-        let app_handle = self
-            .adapter
-            .serve_gatt_application(Application {
-                services,
-                ..Default::default()
-            })
-            .await?;
+            let app_handle = self
+                .adapter
+                .serve_gatt_application(Application {
+                    services,
+                    ..Default::default()
+                })
+                .await?;
 
-        self.setup_char_handlers(handlers);
+            self.setup_char_handlers(handlers);
+            Some(app_handle)
+        };
 
         self.adv_handle = Some(adv_handle);
-        self.app_handle = Some(app_handle);
+        self.app_handle = app_handle;
         Ok(())
     }
 
